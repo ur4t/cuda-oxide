@@ -74,20 +74,18 @@ These are set automatically by `cargo oxide`. For manual invocations, all three 
 
 ### Environment Variables
 
-These are read by the codegen backend during device compilation. They work with both `cargo oxide` and manual `RUSTFLAGS` invocations. `cargo oxide` sets several of these automatically via its CLI flags (e.g. `--verbose`, `--dlto`).
-
 | Variable                      | Effect                                          |
 |-------------------------------|------------------------------------------------ |
 | `CUDA_OXIDE_VERBOSE`          | Verbose compilation output                      |
 | `CUDA_OXIDE_PTX_DIR`          | Output directory for PTX files                  |
-| `CUDA_OXIDE_TARGET`           | Override auto-detected SM target (e.g. `sm_90a`)|
-| `CUDA_OXIDE_ARCH`             | SM architecture for LTOIR/NVVM output           |
+| `CUDA_OXIDE_TARGET`           | GPU architecture (e.g. `sm_90a`). Set by `--arch`.|
+| `CUDA_OXIDE_ARCH`             | Legacy alias for `CUDA_OXIDE_TARGET`.           |
 | `CUDA_OXIDE_LLC`              | Path to a specific `llc` binary                 |
 | `CUDA_OXIDE_DUMP_MIR`         | Dump the `dialect-mir` module                   |
 | `CUDA_OXIDE_DUMP_LLVM`        | Dump the `dialect-llvm` module                  |
 | `CUDA_OXIDE_SHOW_RUSTC_MIR`   | Dump raw rustc MIR                              |
-| `CUDA_OXIDE_EMIT_LTOIR`       | Emit LTOIR container (set to `1`)               |
-| `CUDA_OXIDE_EMIT_NVVM_IR`     | Emit NVVM IR for libNVVM (set to `1`)           |
+| `CUDA_OXIDE_EMIT_LTOIR`       | Emit LTOIR container                            |
+| `CUDA_OXIDE_EMIT_NVVM_IR`     | Emit NVVM IR for libNVVM                        |
 
 ## Source Layout
 

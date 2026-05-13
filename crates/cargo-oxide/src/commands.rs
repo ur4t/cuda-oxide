@@ -827,8 +827,7 @@ fn build_rustflags_with_existing(
     flags
 }
 
-/// Set environment variables that tell the codegen backend which output
-/// format to produce (LTOIR, NVVM IR) and the target GPU architecture.
+/// Set environment variables for the codegen backend.
 fn apply_output_mode(
     cmd: &mut Command,
     dlto: bool,
@@ -836,12 +835,12 @@ fn apply_output_mode(
     arch: Option<&str>,
     target_arch: &str,
 ) {
+    if dlto || emit_nvvm_ir || arch.is_some() {
+        cmd.env("CUDA_OXIDE_TARGET", target_arch);
+    }
     if dlto {
         cmd.env("CUDA_OXIDE_EMIT_LTOIR", "1");
         cmd.env("CUDA_OXIDE_ARCH", target_arch);
-    }
-    if emit_nvvm_ir || arch.is_some() {
-        cmd.env("CUDA_OXIDE_TARGET", target_arch);
     }
     if emit_nvvm_ir {
         cmd.env("CUDA_OXIDE_EMIT_NVVM_IR", "1");

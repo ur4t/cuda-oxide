@@ -428,11 +428,22 @@ pub fn generate_device_code<'tcx>(
             })
             .collect();
 
-        // Check for LTOIR mode (set by cargo oxide --dlto)
-        let emit_ltoir = std::env::var("CUDA_OXIDE_EMIT_LTOIR").is_ok();
-        let ltoir_arch = std::env::var("CUDA_OXIDE_ARCH").unwrap_or_else(|_| "sm_100".to_string());
-        // Check for NVVM IR mode (set by cargo oxide --emit-nvvm-ir)
+        let emit_ltoir   = std::env::var("CUDA_OXIDE_EMIT_LTOIR").is_ok();
         let emit_nvvm_ir = std::env::var("CUDA_OXIDE_EMIT_NVVM_IR").is_ok();
+
+        // Unify architecture lookup: CUDA_OXIDE_TARGET (canonical) -> CUDA_OXIDE_ARCH (legacy).
+        // Defaults to sm_100 and warns if neither is set for LTOIR/NVVM IR modes.
+        let ltoir_arch = std::env::var("CUDA_OXIDE_TARGET")
+            .or_else(|_| std::env::var("CUDA_OXIDE_ARCH"))
+            .unwrap_or_else(|_| {
+                if emit_ltoir || emit_nvvm_ir {
+                    tcx.dcx().warn(
+                        "GPU architecture not set (CUDA_OXIDE_TARGET or CUDA_OXIDE_ARCH). \
+                         Defaulting to sm_100. Pass --arch sm_XX to cargo oxide.",
+                    );
+                }
+                "sm_100".to_string()
+            });
 
         if verbose {
             eprintln!(
@@ -443,7 +454,7 @@ pub fn generate_device_code<'tcx>(
                 eprintln!("[device_codegen] LTOIR mode enabled (arch: {})", ltoir_arch);
             }
             if emit_nvvm_ir {
-                eprintln!("[device_codegen] NVVM IR mode enabled");
+                eprintln!("[device_codegen] NVVM IR mode enabled (arch: {})", ltoir_arch);
             }
         }
 
