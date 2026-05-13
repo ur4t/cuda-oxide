@@ -791,57 +791,35 @@ pub fn translate_rvalue(
                 last_inserted = Some(field_addr_op);
 
                 // Get the result value
-                let mut result_val = field_addr_op.deref(ctx).get_result(0);
+                let result_val = field_addr_op.deref(ctx).get_result(0);
 
-                // Handle additional projections after the first field
-                // e.g., &(*ptr).field1.field2
-                if place.projection.len() > 2 {
-                    for proj in &place.projection[2..] {
-                        match proj {
-                            mir::ProjectionElem::Field(nested_field_idx, nested_field_ty) => {
-                                // Get the nested field type
-                                let nested_field_type =
-                                    super::types::translate_type(ctx, nested_field_ty)?;
-
-                                // Create result pointer type for nested field
-                                let nested_ptr_ty = dialect_mir::types::MirPtrType::get_generic(
-                                    ctx,
-                                    nested_field_type,
-                                    is_mutable,
-                                );
-
-                                let nested_field_addr_op = Operation::new(
-                                    ctx,
-                                    MirFieldAddrOp::get_concrete_op_info(),
-                                    vec![nested_ptr_ty.into()],
-                                    vec![result_val],
-                                    vec![],
-                                    0,
-                                );
-                                nested_field_addr_op.deref_mut(ctx).set_loc(loc.clone());
-
-                                let mir_nested_op = MirFieldAddrOp::new(nested_field_addr_op);
-                                mir_nested_op.set_attr_field_index(
-                                    ctx,
-                                    dialect_mir::attributes::FieldIndexAttr(
-                                        *nested_field_idx as u32,
-                                    ),
-                                );
-
-                                if let Some(prev) = last_inserted {
-                                    nested_field_addr_op.insert_after(ctx, prev);
-                                }
-                                last_inserted = Some(nested_field_addr_op);
-                                result_val = nested_field_addr_op.deref(ctx).get_result(0);
-                            }
-                            _ => {
-                                // For other projections (Index, etc.), fall through to general case
-                                // This is a simplification - complex paths like &(*ptr).field[i]
-                                // would need more handling
-                                break;
-                            }
-                        }
-                    }
+                // Handle additional projections after the first field, e.g.
+                // `&(*ptr).field.subfield`, `&(*ptr).field[i]`,
+                // `&(*ptr).field[N]`. The helper walks the tail of the
+                // projection list and emits `MirFieldAddrOp` /
+                // `MirArrayElementAddrOp` as appropriate so that the
+                // resulting pointer addresses the *actual* projected place.
+                //
+                // Before this was unified, the inline handler here recognised
+                // only nested `Field` projections and silently `break`'d on
+                // anything else (including runtime `Index`), then returned
+                // the partial field address. That miscompiled places like
+                // `&(*ptr).0[i]` to the address of slot 0, dropping `i`
+                // entirely — see closure_index_miscompile example.
+                if place.projection.len() > 2
+                    && let Some((tail_val, tail_last)) = translate_place_addr_from_slot(
+                        ctx,
+                        body,
+                        value_map,
+                        result_val,
+                        &place.projection[2..],
+                        is_mutable,
+                        block_ptr,
+                        last_inserted,
+                        loc.clone(),
+                    )?
+                {
+                    return Ok((None, tail_val, tail_last));
                 }
 
                 return Ok((None, result_val, last_inserted));
@@ -916,6 +894,8 @@ pub fn translate_rvalue(
             if let Some(slot) = value_map.get_slot(place.local)
                 && let Some((result_val, last_inserted)) = translate_place_addr_from_slot(
                     ctx,
+                    body,
+                    value_map,
                     slot,
                     &place.projection,
                     is_mutable,
@@ -3158,6 +3138,8 @@ fn apply_enum_field_projection(
 /// final result pointer also carries this mutability.
 fn translate_place_addr_from_slot(
     ctx: &mut Context,
+    body: &mir::Body,
+    value_map: &ValueMap,
     slot: Value,
     projection: &[mir::ProjectionElem],
     is_mutable: bool,
@@ -3254,10 +3236,59 @@ fn translate_place_addr_from_slot(
                 current_prev_op = Some(addr_op);
             }
 
-            // Remaining projection kinds (Deref, Index(runtime), Downcast,
-            // Subslice, ...) aren't lowered to addresses here yet. Punt to the
-            // caller, which will fall back to materialising a value and
-            // wrapping it in `MirRefOp`.
+            // Runtime `arr[i]` indexing. Without this arm, a place like
+            // `&(*ptr).field[i]` would silently drop the `Index` projection
+            // and return a pointer to the array's first slot, miscompiling
+            // every load through the reference into a load of element 0.
+            mir::ProjectionElem::Index(index_local) => {
+                let (element_ty, addr_space) = match pointer_pointee_kind(ctx, current) {
+                    Some(kind) => kind,
+                    None => return Ok(None),
+                };
+                let element_ty = match element_ty {
+                    PointeeKind::Array(elem_ty) => elem_ty,
+                    PointeeKind::Other => return Ok(None),
+                };
+
+                let index_place = mir::Place {
+                    local: *index_local,
+                    projection: vec![],
+                };
+                let (index_val, next_prev_op) = translate_place(
+                    ctx,
+                    body,
+                    &index_place,
+                    value_map,
+                    block_ptr,
+                    current_prev_op,
+                    loc.clone(),
+                )?;
+                current_prev_op = next_prev_op;
+
+                let elem_ptr_ty =
+                    dialect_mir::types::MirPtrType::get(ctx, element_ty, is_mutable, addr_space)
+                        .into();
+                let addr_op = Operation::new(
+                    ctx,
+                    MirArrayElementAddrOp::get_concrete_op_info(),
+                    vec![elem_ptr_ty],
+                    vec![current, index_val],
+                    vec![],
+                    0,
+                );
+                addr_op.deref_mut(ctx).set_loc(loc.clone());
+                match current_prev_op {
+                    Some(p) => addr_op.insert_after(ctx, p),
+                    None => addr_op.insert_at_front(block_ptr, ctx),
+                }
+                current = addr_op.deref(ctx).get_result(0);
+                current_prev_op = Some(addr_op);
+            }
+
+            // Remaining projection kinds (Deref, Downcast, Subslice, ...)
+            // aren't lowered to addresses here yet. Punt to the caller, which
+            // will fall back to materialising a value and wrapping it in
+            // `MirRefOp`.
             _ => return Ok(None),
         }
     }
