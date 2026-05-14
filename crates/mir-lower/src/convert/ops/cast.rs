@@ -33,15 +33,17 @@
 //! | other                          | falls through to `emit_pointer_cast`             |
 //!
 //! ## `emit_pointer_cast` handles struct↔ptr (fat/thin pointer) conversions:
-//! | Source → Dest                  | LLVM Operation                    |
-//! |--------------------------------|-----------------------------------|
-//! | struct → ptr (fat→thin)        | `extractvalue` field 0            |
-//! | ptr → struct (thin→fat)        | `insertvalue` into undef          |
-//! | ptr → integer                  | `ptrtoint`                        |
-//! | integer → ptr                  | `inttoptr`                        |
-//! | struct → struct (transmute)    | `alloca` + `store` + `load`       |
-//! | ptr → ptr (diff addrspace)     | `addrspacecast`                   |
-//! | otherwise                      | `bitcast`                         |
+//! | Source → Dest                       | LLVM Operation                    |
+//! |-------------------------------------|-----------------------------------|
+//! | struct → ptr (fat→thin)             | `extractvalue` field 0            |
+//! | ptr → struct (thin→fat)             | `insertvalue` into undef          |
+//! | ptr → integer                       | `ptrtoint`                        |
+//! | integer → ptr                       | `inttoptr`                        |
+//! | struct → struct (transmute)         | `alloca` + `store` + `load`       |
+//! | ptr → ptr (diff addrspace)          | `addrspacecast`                   |
+//! | integer ↔ struct, equal size        | `alloca` + `store` + `load`       |
+//! | integer ↔ struct, mismatched size   | cuda-oxide error (see issue #21)  |
+//! | otherwise                           | `bitcast`                         |
 
 use crate::convert::types::convert_type;
 use crate::helpers;
@@ -100,7 +102,7 @@ pub fn convert(
     let val_ty = val.get_type(ctx);
 
     let llvm_op = match &cast_kind {
-        MirCastKindAttr::Transmute => emit_pointer_cast(ctx, rewriter, val, val_ty, llvm_ty)?,
+        MirCastKindAttr::Transmute => emit_pointer_cast(ctx, rewriter, op, val, val_ty, llvm_ty)?,
 
         MirCastKindAttr::IntToInt => {
             let src_w = val_ty
@@ -131,7 +133,7 @@ pub fn convert(
         }
 
         MirCastKindAttr::PointerCoercionUnsize => {
-            emit_unsize_cast(ctx, rewriter, val, val_ty, llvm_ty, mir_opd_ty)?
+            emit_unsize_cast(ctx, rewriter, op, val, val_ty, llvm_ty, mir_opd_ty)?
         }
 
         MirCastKindAttr::PtrToPtr
@@ -141,7 +143,7 @@ pub fn convert(
         | MirCastKindAttr::PointerCoercionUnsafeFnPointer
         | MirCastKindAttr::PointerCoercionClosureFnPointer
         | MirCastKindAttr::PointerCoercionArrayToPointer
-        | MirCastKindAttr::Subtype => emit_pointer_cast(ctx, rewriter, val, val_ty, llvm_ty)?,
+        | MirCastKindAttr::Subtype => emit_pointer_cast(ctx, rewriter, op, val, val_ty, llvm_ty)?,
 
         MirCastKindAttr::PointerExposeAddress => {
             llvm::PtrToIntOp::new(ctx, val, llvm_ty).get_operation()
@@ -321,6 +323,7 @@ fn convert_float_to_int(
 fn emit_unsize_cast(
     ctx: &mut Context,
     rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
     val: pliron::value::Value,
     val_ty: Ptr<pliron::r#type::TypeObj>,
     llvm_ty: Ptr<pliron::r#type::TypeObj>,
@@ -363,7 +366,7 @@ fn emit_unsize_cast(
         }
     }
 
-    emit_pointer_cast(ctx, rewriter, val, val_ty, llvm_ty)
+    emit_pointer_cast(ctx, rewriter, op, val, val_ty, llvm_ty)
 }
 
 /// Emit a pointer-compatible cast, handling the struct↔ptr patterns that arise
@@ -377,6 +380,7 @@ fn emit_unsize_cast(
 fn emit_pointer_cast(
     ctx: &mut Context,
     rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
     val: pliron::value::Value,
     val_ty: Ptr<pliron::r#type::TypeObj>,
     llvm_ty: Ptr<pliron::r#type::TypeObj>,
@@ -433,9 +437,224 @@ fn emit_pointer_cast(
         } else {
             Ok(llvm::BitcastOp::new(ctx, val, llvm_ty).get_operation())
         }
+    } else if val_ty.deref(ctx).is::<IntegerType>() && dst_is_struct {
+        // Scalar -> aggregate Transmute. rustc emits this when going from a
+        // niche-optimised enum's scalar form (e.g. `i64` for
+        // `Option<NonZeroUsize>`) into the un-niched aggregate form that
+        // `MirEnumType` lowers to (e.g. `{ i8, { { i64 } } }`). The importer
+        // attaches the niche encoding on the cast op; we rebuild the
+        // aggregate from it here. See issue #21.
+        emit_scalar_to_niched_enum(ctx, rewriter, op, val, val_ty, llvm_ty)
+    } else if src_is_struct && llvm_ty.deref(ctx).is::<IntegerType>() {
+        // Aggregate -> scalar, e.g. `{ { i64 } }` -> `i64`. Memory round-trip
+        // works whenever the sizes match; size-mismatched cases would need
+        // the inverse niche reconstruction but rustc does not emit those for
+        // any pattern we have seen.
+        emit_struct_to_scalar(ctx, rewriter, val, val_ty, llvm_ty)
     } else {
         Ok(llvm::BitcastOp::new(ctx, val, llvm_ty).get_operation())
     }
+}
+
+fn const_i64(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    n: i64,
+) -> pliron::value::Value {
+    let i64_ty = IntegerType::get(ctx, 64, Signedness::Signless);
+    let apint = pliron::utils::apint::APInt::from_i64(n, std::num::NonZeroUsize::new(64).unwrap());
+    let attr = pliron::builtin::attributes::IntegerAttr::new(i64_ty, apint);
+    let c = llvm::ConstantOp::new(ctx, attr.into());
+    rewriter.insert_operation(ctx, c.get_operation());
+    c.get_operation().deref(ctx).get_result(0)
+}
+
+fn const_int_of(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    ty: Ptr<pliron::r#type::TypeObj>,
+    value: i64,
+) -> Result<pliron::value::Value> {
+    let int_ty = ty
+        .deref(ctx)
+        .downcast_ref::<IntegerType>()
+        .ok_or_else(|| pliron::input_error_noloc!("const_int_of: expected IntegerType"))?
+        .clone();
+    let width = std::num::NonZeroUsize::new(int_ty.width() as usize)
+        .ok_or_else(|| pliron::input_error_noloc!("const_int_of: zero-width integer"))?;
+    let apint = pliron::utils::apint::APInt::from_i64(value, width);
+    let attr = pliron::builtin::attributes::IntegerAttr::new(
+        IntegerType::get(ctx, int_ty.width(), int_ty.signedness()),
+        apint,
+    );
+    let c = llvm::ConstantOp::new(ctx, attr.into());
+    rewriter.insert_operation(ctx, c.get_operation());
+    Ok(c.get_operation().deref(ctx).get_result(0))
+}
+
+/// Find the `insertvalue` index path that lands `scalar_ty` at the deepest
+/// scalar slot of `aggregate_ty`, descending through single-field struct
+/// wrappers (the `NonZero<T>` -> `Pat<T, _>` -> `T` chain). Returns `None`
+/// when no compatible scalar slot exists.
+fn deep_scalar_index_path(
+    ctx: &Context,
+    aggregate_ty: Ptr<pliron::r#type::TypeObj>,
+    scalar_ty: Ptr<pliron::r#type::TypeObj>,
+) -> Option<Vec<u32>> {
+    let mut path = Vec::new();
+    let mut current = aggregate_ty;
+    loop {
+        if current == scalar_ty {
+            return Some(path);
+        }
+        let next = {
+            let r = current.deref(ctx);
+            let s = r.downcast_ref::<dialect_llvm::types::StructType>()?;
+            if s.num_fields() != 1 {
+                return None;
+            }
+            s.field_type(0)
+        };
+        path.push(0);
+        current = next;
+        // Allow same-width integers even if not pointer-equal: signedness
+        // can differ between MIR and LLVM signless reprs.
+        if let (Some(c), Some(t)) = (
+            current.deref(ctx).downcast_ref::<IntegerType>(),
+            scalar_ty.deref(ctx).downcast_ref::<IntegerType>(),
+        ) && c.width() == t.width()
+        {
+            return Some(path);
+        }
+        if path.len() > 8 {
+            return None;
+        }
+    }
+}
+
+struct NicheInfo {
+    niche_start: i64,
+    niche_variant_idx: i64,
+    untagged_variant_idx: i64,
+}
+
+fn read_niche_info(ctx: &Context, op: Ptr<Operation>) -> Result<Option<NicheInfo>> {
+    fn read(ctx: &Context, op: Ptr<Operation>, key: &str) -> Option<i64> {
+        let ident: pliron::identifier::Identifier = key.try_into().ok()?;
+        let op_ref = op.deref(ctx);
+        let attr = op_ref.attributes.0.get(&ident)?;
+        let int_attr = attr
+            .downcast_ref::<pliron::builtin::attributes::IntegerAttr>()?;
+        Some(int_attr.value().to_i64())
+    }
+    let niche_start = match read(ctx, op, "niche_start") {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    let niche_variant_idx = read(ctx, op, "niche_variant_idx").ok_or_else(|| {
+        pliron::input_error_noloc!(
+            "niched-enum Transmute missing `niche_variant_idx` attribute"
+        )
+    })?;
+    let untagged_variant_idx = read(ctx, op, "untagged_variant_idx").ok_or_else(|| {
+        pliron::input_error_noloc!(
+            "niched-enum Transmute missing `untagged_variant_idx` attribute"
+        )
+    })?;
+    Ok(Some(NicheInfo {
+        niche_start,
+        niche_variant_idx,
+        untagged_variant_idx,
+    }))
+}
+
+/// Rebuild a `MirEnumType` aggregate from the scalar `val` rustc passed
+/// through a niche-encoded Transmute, using the niche info the importer
+/// attached. Missing attrs are a hard error: we refuse to silently
+/// miscompile an unrecognised scalar -> aggregate cast.
+fn emit_scalar_to_niched_enum(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    val: pliron::value::Value,
+    val_ty: Ptr<pliron::r#type::TypeObj>,
+    llvm_ty: Ptr<pliron::r#type::TypeObj>,
+) -> Result<Ptr<Operation>> {
+    let niche = read_niche_info(ctx, op)?.ok_or_else(|| {
+        pliron::input_error_noloc!(
+            "scalar -> aggregate Transmute without niche attributes; \
+             the importer did not classify this destination as a niche-optimised enum. \
+             Refusing to fall through to an invalid bitcast."
+        )
+    })?;
+
+    let (disc_ty, payload_ty) = {
+        let r = llvm_ty.deref(ctx);
+        let s = r
+            .downcast_ref::<dialect_llvm::types::StructType>()
+            .ok_or_else(|| {
+                pliron::input_error_noloc!("emit_scalar_to_niched_enum: dst is not a struct")
+            })?;
+        if s.num_fields() != 2 {
+            return pliron::input_err_noloc!(
+                "niched-enum aggregate must have exactly 2 fields (discriminant, payload), got {}",
+                s.num_fields()
+            );
+        }
+        (s.field_type(0), s.field_type(1))
+    };
+
+    let niche_const = const_int_of(ctx, rewriter, val_ty, niche.niche_start)?;
+    let icmp = llvm::ICmpOp::new(
+        ctx,
+        dialect_llvm::attributes::ICmpPredicateAttr::EQ,
+        val,
+        niche_const,
+    );
+    rewriter.insert_operation(ctx, icmp.get_operation());
+    let is_niche = icmp.get_operation().deref(ctx).get_result(0);
+
+    let niche_disc = const_int_of(ctx, rewriter, disc_ty, niche.niche_variant_idx)?;
+    let untagged_disc = const_int_of(ctx, rewriter, disc_ty, niche.untagged_variant_idx)?;
+    let disc_select = llvm::SelectOp::new(ctx, is_niche, niche_disc, untagged_disc);
+    rewriter.insert_operation(ctx, disc_select.get_operation());
+    let disc = disc_select.get_operation().deref(ctx).get_result(0);
+
+    let undef = llvm::UndefOp::new(ctx, llvm_ty);
+    rewriter.insert_operation(ctx, undef.get_operation());
+    let undef_val = undef.get_operation().deref(ctx).get_result(0);
+
+    let with_disc = llvm::InsertValueOp::new(ctx, undef_val, disc, vec![0]);
+    rewriter.insert_operation(ctx, with_disc.get_operation());
+    let with_disc_val = with_disc.get_operation().deref(ctx).get_result(0);
+
+    let mut deep_path = vec![1u32];
+    let rest = deep_scalar_index_path(ctx, payload_ty, val_ty).ok_or_else(|| {
+        pliron::input_error_noloc!(
+            "niched-enum payload field has no scalar slot matching the source width"
+        )
+    })?;
+    deep_path.extend(rest);
+
+    let final_insert = llvm::InsertValueOp::new(ctx, with_disc_val, val, deep_path);
+    Ok(final_insert.get_operation())
+}
+
+/// Aggregate -> scalar memory round-trip (e.g. `{ { i64 } }` -> `i64`).
+fn emit_struct_to_scalar(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    val: pliron::value::Value,
+    val_ty: Ptr<pliron::r#type::TypeObj>,
+    llvm_ty: Ptr<pliron::r#type::TypeObj>,
+) -> Result<Ptr<Operation>> {
+    let one = const_i64(ctx, rewriter, 1);
+    let alloca = llvm::AllocaOp::new(ctx, val_ty, one);
+    rewriter.insert_operation(ctx, alloca.get_operation());
+    let ptr = alloca.get_operation().deref(ctx).get_result(0);
+    let store = llvm::StoreOp::new(ctx, val, ptr);
+    rewriter.insert_operation(ctx, store.get_operation());
+    Ok(llvm::LoadOp::new(ctx, ptr, llvm_ty).get_operation())
 }
 
 /// Float → float: extend or truncate precision.
