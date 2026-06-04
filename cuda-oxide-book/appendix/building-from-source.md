@@ -144,10 +144,10 @@ build process. `cargo-oxide` handles building it transparently.
 ## Install cargo-oxide
 
 `cargo-oxide` is the cargo subcommand that drives the full compilation
-pipeline. Inside the repo, it works via a workspace alias. For standalone use:
+pipeline. Inside the repo, it works via a workspace alias. For standalone use, install it with the pinned nightly toolchain:
 
 ```bash
-cargo install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
+cargo +nightly-2026-04-03 install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` automatically fetches and builds the codegen backend
