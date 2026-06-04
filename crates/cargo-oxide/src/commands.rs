@@ -519,7 +519,7 @@ pub fn codegen_build_example(
 ///
 /// Enables all diagnostic env vars (`CUDA_OXIDE_VERBOSE`, `SHOW_RUSTC_MIR`,
 /// `DUMP_MIR`, `DUMP_LLVM`) so the user can see MIR collection, the
-/// `dialect-mir` module (pre- and post-`mem2reg`), the `dialect-llvm`
+/// `dialect-mir` module (pre- and post-`mem2reg`), the LLVM dialect
 /// module, textual LLVM IR, and the final PTX or NVVM IR. After the build,
 /// generated artifacts are printed to stdout.
 pub fn codegen_show_pipeline(ctx: &Context, example: &str, emit_nvvm_ir: bool, arch: Option<&str>) {

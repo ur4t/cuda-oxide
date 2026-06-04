@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Call operation conversion: `dialect-mir` → `dialect-llvm`.
+//! Call operation conversion: `dialect-mir` → LLVM dialect.
 //!
 //! Handles function call lowering with ABI-level transformations:
 //! - Slice arguments flattened to (ptr, len) pairs

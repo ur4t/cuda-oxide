@@ -1,9 +1,9 @@
 # dialect-mir
 
-A [pliron](https://github.com/vaivaswatha/pliron) dialect that represents Rust's Mid-level Intermediate Representation (MIR). This is the first IR in the cuda-oxide pipeline -- `mir-importer` translates rustc's MIR into this dialect, then `mir-lower` lowers it to `dialect-llvm` for PTX generation.
+A [pliron](https://github.com/vaivaswatha/pliron) dialect that represents Rust's Mid-level Intermediate Representation (MIR). This is the first IR in the cuda-oxide pipeline -- `mir-importer` translates rustc's MIR into this dialect, then `mir-lower` lowers it to the LLVM dialect for PTX generation.
 
 ```text
-rustc MIR ──► mir-importer ──► dialect-mir ──► mir-lower ──► dialect-llvm ──► LLVM IR ──► PTX
+rustc MIR ──► mir-importer ──► dialect-mir ──► mir-lower ──► LLVM dialect ──► LLVM IR ──► PTX
 ```
 
 ## Types
@@ -117,7 +117,7 @@ src/
 
 ## Further Reading
 
-- [dialect-llvm](../dialect-llvm/) -- pliron dialect modelling LLVM IR (lowering target)
+- [llvm-export](../llvm-export/) -- pliron-llvm shim + textual `.ll` exporter (lowering target)
 - [dialect-nvvm](../dialect-nvvm/) -- NVVM GPU intrinsics
 - [mir-importer](../mir-importer/) -- translates rustc MIR → `dialect-mir`
-- [mir-lower](../mir-lower/) -- lowers `dialect-mir` → `dialect-llvm`
+- [mir-lower](../mir-lower/) -- lowers `dialect-mir` → LLVM dialect

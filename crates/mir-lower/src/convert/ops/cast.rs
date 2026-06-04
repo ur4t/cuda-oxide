@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Cast operation conversion: `dialect-mir` → `dialect-llvm`.
+//! Cast operation conversion: `dialect-mir` → LLVM dialect.
 //!
 //! Dispatches on `MirCastKindAttr` (preserved from Rust MIR) to select the
 //! correct LLVM instruction. This avoids guessing cast semantics from types.

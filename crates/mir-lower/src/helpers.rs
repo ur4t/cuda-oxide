@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Helper functions for `dialect-mir` → `dialect-llvm` lowering.
+//! Helper functions for `dialect-mir` → LLVM dialect lowering.
 //!
 //! This module provides utility functions that are shared across multiple
 //! operation converters. These helpers handle common tasks like:

@@ -105,7 +105,7 @@ See the `async_mlp` example and `crates/cuda-async/README.md` for the full async
 # Build and run an example
 cargo oxide run host_closure
 
-# Show full compilation pipeline (Rust MIR → dialect-mir → mem2reg → dialect-llvm → LLVM IR → PTX)
+# Show full compilation pipeline (Rust MIR → dialect-mir → mem2reg → LLVM dialect → LLVM IR → PTX)
 cargo oxide pipeline vecadd
 
 # Debug with cuda-gdb
@@ -266,9 +266,9 @@ cargo oxide run gemm_sol
 |----------------------|-------------------------------------------------------|
 | `rustc-codegen-cuda` | Custom rustc backend                                  |
 | `mir-importer`       | Rust MIR -> `dialect-mir` translation + pipeline      |
-| `mir-lower`          | `dialect-mir` -> `dialect-llvm` lowering              |
+| `mir-lower`          | `dialect-mir` -> LLVM dialect lowering                |
 | `dialect-mir`        | pliron dialect modelling Rust MIR                     |
-| `dialect-llvm`       | pliron dialect modelling LLVM IR (+ export to `.ll`)  |
+| `llvm-export`        | pliron-llvm shim + textual `.ll` exporter             |
 | `dialect-nvvm`       | pliron dialect modelling NVVM intrinsics              |
 
 ### Build Tooling

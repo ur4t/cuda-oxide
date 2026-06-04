@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! `dialect-mir` → `dialect-llvm` function lowering via `inline_region`.
+//! `dialect-mir` → LLVM dialect function lowering via `inline_region`.
 //!
 //! This module implements [`convert_func`] — the entry point for lowering
 //! `MirFuncOp` → `llvm.func` using pliron's `DialectConversion` framework.

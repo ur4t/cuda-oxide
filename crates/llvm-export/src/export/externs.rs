@@ -48,7 +48,7 @@ pub struct DeviceExternAttrs {
 /// Trait for types that can be converted to [`DeviceExternDecl`].
 ///
 /// This allows mir-importer to pass its own DeviceExternDecl type
-/// without dialect-llvm depending on mir-importer.
+/// without llvm-export depending on mir-importer.
 pub trait AsDeviceExtern {
     fn as_device_extern(&self) -> DeviceExternDecl;
 }

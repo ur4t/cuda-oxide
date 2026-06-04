@@ -44,8 +44,8 @@ use super::{
 ///
 /// # Maintenance contract
 ///
-/// Adding a new dialect-llvm op to textual export touches four places in
-/// this file:
+/// Wiring an LLVM dialect op (defined upstream in `pliron-llvm`) into
+/// textual export touches four places in this file:
 ///
 /// 1. Add a variant to `LlvmOp` below.
 /// 2. Add a matching entry in the [`classify_op!`] invocation.

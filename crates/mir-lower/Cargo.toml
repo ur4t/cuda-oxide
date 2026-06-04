@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "dialect-mir to dialect-llvm lowering pass"
+description = "dialect-mir to LLVM dialect lowering pass"
 
 [dependencies]
 pliron = { workspace = true }

@@ -6,7 +6,7 @@
 //! End-to-end repro for `llvm.addressof` export ordering (issue #54).
 //!
 //! The kernel does `OUTPUT_NORM[0] = OUTPUT_NORM[0] * weight` on a static
-//! `SharedArray<f32, 1>`. Before the fix in PR #55, the dialect-llvm exporter
+//! `SharedArray<f32, 1>`. Before the fix in PR #55, the llvm-export textual exporter
 //! gave the `addressof @__shared_mem_N` result a `%vN` SSA name even though
 //! `addressof` is virtual in textual LLVM IR (it has no instruction form,
 //! only a symbol reference at use sites). When the use printed before the

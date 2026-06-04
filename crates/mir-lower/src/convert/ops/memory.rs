@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Memory operation conversion: `dialect-mir` → `dialect-llvm`.
+//! Memory operation conversion: `dialect-mir` → LLVM dialect.
 //!
-//! Converts `dialect-mir` memory operations to their `dialect-llvm` equivalents.
+//! Converts `dialect-mir` memory operations to their LLVM dialect equivalents.
 //!
 //! # Operations
 //!

@@ -12,7 +12,7 @@
 //! 2. **`core::sync::atomic::*`** — standard library atomics (via `std::intrinsics::atomic_*`)
 //!
 //! Both front-ends emit the same NVVM ops and share the entire lowering pipeline
-//! (mir-lower fence splitting → `dialect-llvm` → export → llc → PTX).
+//! (mir-lower fence splitting → LLVM dialect → export → llc → PTX).
 //!
 //! # cuda_device Path — Type Resolution
 //!

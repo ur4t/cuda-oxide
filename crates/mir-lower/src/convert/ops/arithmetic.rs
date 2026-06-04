@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Arithmetic operation conversion: `dialect-mir` → `dialect-llvm`.
+//! Arithmetic operation conversion: `dialect-mir` → LLVM dialect.
 //!
 //! Converts `dialect-mir` arithmetic, bitwise, and comparison operations to
-//! their `dialect-llvm` equivalents.
+//! their LLVM dialect equivalents.
 //!
 //! # Operations
 //!

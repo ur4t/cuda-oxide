@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Constant operation conversion: `dialect-mir` → `dialect-llvm`.
+//! Constant operation conversion: `dialect-mir` → LLVM dialect.
 //!
-//! Converts constant definitions from `dialect-mir` to `dialect-llvm`.
+//! Converts constant definitions from `dialect-mir` to the LLVM dialect.
 //!
 //! # Supported Operations
 //!
-//! | `dialect-mir` Op     | `dialect-llvm` Op | Description       |
+//! | `dialect-mir` Op     | LLVM dialect Op   | Description       |
 //! |----------------------|-------------------|-------------------|
 //! | `mir.constant`       | `llvm.constant`   | Integer constants |
 //! | `mir.float_constant` | `llvm.constant`   | Float constants   |
@@ -17,7 +17,7 @@
 //! # Type Handling
 //!
 //! `dialect-mir` uses signed/unsigned integer types (`ui64`, `si64`), while
-//! `dialect-llvm` uses signless integers (`i64`). The conversion preserves
+//! the LLVM dialect uses signless integers (`i64`). The conversion preserves
 //! bit-width but changes to the signless representation.
 //!
 //! Float constants (f32, f64) pass through unchanged.

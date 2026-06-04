@@ -1,90 +1,50 @@
-# dialect-llvm
+# llvm-export
 
-A [pliron](https://github.com/vaivaswatha/pliron) dialect for LLVM IR, targeting the NVPTX backend. `mir-lower` lowers `dialect-mir` into this dialect, which is then exported to textual LLVM IR (`.ll`) for PTX generation via `llc`.
+A thin shim around [pliron-llvm](https://github.com/vaivaswatha/pliron) plus a
+pure-Rust textual LLVM IR (`.ll`) exporter, targeting the NVPTX backend.
+
+The LLVM dialect *modeling* (ops like `llvm.add`, types like `llvm.ptr`,
+attributes, and op-interfaces) lives upstream in the `pliron-llvm` crate.
+cuda-oxide consumes it as a git dependency and no longer models the LLVM
+dialect locally. This crate re-exports `pliron-llvm` so existing
+`llvm_export::{ops,types,attributes,op_interfaces}` paths keep resolving, adds
+a few GPU-specific extensions pliron-llvm lacks, and keeps the textual `.ll`
+exporter local (pliron-llvm only emits real `.ll` via an `llvm-sys` bridge,
+which cuda-oxide avoids).
 
 ```text
-dialect-mir ──► mir-lower ──► dialect-llvm ──► export ──► .ll file ──► llc ──► .ptx
+dialect-mir ──► mir-lower ──► LLVM dialect ──► export ──► .ll file ──► llc ──► .ptx
+                              (pliron-llvm)    (this crate)
 ```
 
-## Types
+## What this crate adds on top of pliron-llvm
 
-| Type          | Description                         | LLVM Syntax                               |
-|---------------|-------------------------------------|-------------------------------------------|
-| `StructType`  | Named or anonymous structs          | `{ i32, float }`, `%Point = type { ... }` |
-| `PointerType` | Opaque pointers with address space  | `ptr`, `ptr addrspace(3)`                 |
-| `ArrayType`   | Fixed-size arrays                   | `[256 x float]`                           |
-| `VectorType`  | SIMD vectors                        | `<4 x float>`                             |
-| `FuncType`    | Function signatures                 | `(i32, ptr) -> void`                      |
-| `VoidType`    | Void (no return value)              | `void`                                    |
+| Extension              | Why it lives here                                          |
+|------------------------|------------------------------------------------------------|
+| Named address spaces   | pliron-llvm stores a raw `u32`; we name generic/global/... |
+| `PointerTypeExt`       | `get_shared` / `get_global` / `is_tmem` convenience        |
+| `LlvmSyncScope` enum   | upstream syncscope is `Option<String>`; we keep an enum    |
+| fp16 bit helpers       | `fp16_attr_from_bits` / `fp16_attr_to_bits`                |
+| `InlineAsmOpExt`       | `new_convergent(...)` call shape used across mir-lower     |
+| `GlobalOpExt`          | explicit alignment on a `GlobalOp`                         |
 
-### Address Spaces
+The named address spaces are generic=0, global=1, shared=3, constant=4,
+local=5, tmem=6 (Blackwell tcgen05 operands).
 
-| Space      | ID | Description                       |
-|------------|----|-----------------------------------|
-| Generic    | 0  | Default, resolved at runtime      |
-| Global     | 1  | Device VRAM                       |
-| Shared     | 3  | Per-block scratchpad              |
-| Constant   | 4  | Read-only cached                  |
-| Local      | 5  | Per-thread stack/spill            |
-| TensorMem  | 6  | Blackwell+ tcgen05 operands       |
+## LLVM dialect modeling (upstream)
 
-## Operations
-
-63 operations across 13 modules:
-
-| Module         | Ops | Description                                                                                                                   |
-|----------------|-----|-------------------------------------------------------------------------------------------------------------------------------|
-| `arithmetic`   | 19  | Integer (add, sub, mul, sdiv, udiv, srem, urem, and, or, xor, shl, lshr, ashr) and float (fadd, fsub, fmul, fdiv, frem, fneg) |
-| `atomic`       | 5   | atomic load, store, RMW, cmpxchg, fence                                                                                       |
-| `comparison`   | 2   | `icmp` (integer) and `fcmp` (float)                                                                                           |
-| `cast`         | 13  | sext, zext, trunc, fpext, fptrunc, sitofp, uitofp, fptosi, fptoui, bitcast, ptrtoint, inttoptr, addrspacecast                 |
-| `memory`       | 4   | alloca, load, store, getelementptr                                                                                            |
-| `control_flow` | 5   | br, cond_br, switch, ret, unreachable                                                                                         |
-| `aggregate`    | 3   | extractvalue, insertvalue, extractelement                                                                                     |
-| `constants`    | 3   | constant, zeroinitializer, undef                                                                                              |
-| `symbol`       | 3   | func, global, addressof                                                                                                       |
-| `call`         | 2   | call, call_intrinsic                                                                                                          |
-| `select`       | 1   | conditional selection                                                                                                         |
-| `asm`          | 2   | inline assembly (single-result and multi-result)                                                                              |
-| `va`           | 1   | variadic argument handling                                                                                                    |
-
-## Verification
-
-All operations implement comprehensive verification via pliron's `Verify` trait:
-
-| Category     | What's Checked                                                        |
-|--------------|-----------------------------------------------------------------------|
-| Arithmetic   | Both operands same type, result matches, integer-only for bitwise ops |
-| Comparison   | Predicate attribute valid, operands match, result is `i1`             |
-| Cast         | Source/target width relationships (e.g. sext requires wider target)   |
-| Memory       | Pointer types, element types, GEP index validity                      |
-| Control flow | Successor blocks valid, condition is `i1`, switch cases               |
-| Aggregate    | Index within bounds, element type matches                             |
-| Symbol       | Function type consistent, entry block args match signature            |
-| Call         | Argument count and types match callee signature                       |
-| Atomic       | Ordering and scope attributes valid, pointer operand                  |
-
-This catches lowering bugs before the LLVM IR export phase.
-
-## Attributes
-
-| Attribute                       | Description                                     |
-|---------------------------------|-------------------------------------------------|
-| `IntegerOverflowFlagsAttr`      | `nsw` / `nuw` flags on integer arithmetic       |
-| `FastmathFlagsAttr`             | Fast-math flags (`nnan`, `ninf`, `nsz`, etc.)   |
-| `ICmpPredicateAttr`             | Integer comparison predicate                    |
-| `FCmpPredicateAttr`             | Float comparison predicate                      |
-| `GepIndicesAttr`                | GEP index list (constant or operand per index)  |
-| `InsertExtractValueIndicesAttr` | Indices for `insertvalue` / `extractvalue`      |
-| `CaseValuesAttr`                | Switch case values                              |
-| `LinkageAttr`                   | Linkage kind for globals and functions          |
-| `LlvmAtomicOrdering`            | Atomic memory ordering                          |
-| `LlvmSyncScope`                 | Synchronization scope for atomics               |
-| `LlvmAtomicRmwKind`             | Atomic RMW operation kind                       |
+The types (`StructType`, `PointerType`, `ArrayType`, `VectorType`, `FuncType`,
+`VoidType`), operations (arithmetic, atomic, comparison, cast, memory, control
+flow, aggregate, constants, symbol, call, select, inline asm, variadic), and
+attributes (overflow flags, fast-math flags, comparison predicates, GEP
+indices, linkage, atomic ordering / scope / rmw-kind) are all defined upstream
+in `pliron-llvm`. See that crate for the full op/type/attribute reference and
+the `Verify` trait impls that catch lowering bugs before export.
 
 ## Export to LLVM IR
 
-The `export` module serializes the dialect-llvm module to textual LLVM IR. Two backend configurations control the output format:
+The `export` module serializes the LLVM dialect module to textual LLVM IR. Two
+backend configurations control the output format:
 
 | Configuration      | Use Case    | `@llvm.used` | `!nvvmir.version` | `!nvvm.annotations`    |
 |--------------------|-------------|--------------|-------------------|------------------------|
@@ -92,7 +52,7 @@ The `export` module serializes the dialect-llvm module to textual LLVM IR. Two b
 | `NvvmExportConfig` | NVVM IR     | Yes          | Yes               | All kernels            |
 
 ```rust
-use dialect_llvm::export::{export_module_to_string, export_module_to_string_with_config, NvvmExportConfig};
+use llvm_export::export::{export_module_to_string, export_module_to_string_with_config, NvvmExportConfig};
 
 // Default (PTX path)
 let ll = export_module_to_string(&ctx, &module)?;
@@ -101,7 +61,10 @@ let ll = export_module_to_string(&ctx, &module)?;
 let nvvm_ir = export_module_to_string_with_config(&ctx, &module, &NvvmExportConfig)?;
 ```
 
-The export handles block-arg to PHI-node translation, grouped intrinsic declarations, `convergent` attribute on synchronization ops, kernel metadata (`!nvvm.annotations`), launch bounds, cluster config, and device extern FFI declarations.
+The export handles block-arg to PHI-node translation, grouped intrinsic
+declarations, `convergent` attribute on synchronization ops, kernel metadata
+(`!nvvm.annotations`), launch bounds, cluster config, and device extern FFI
+declarations.
 
 ### Target Configuration
 
@@ -113,42 +76,38 @@ The export handles block-arg to PHI-node translation, grouped intrinsic declarat
 
 ## Registration
 
+Registration is automatic. Every dialect, op, type, and attribute linked into
+the binary registers itself when a `Context` is created (`Context::default`
+runs all link-time registrations), so there is no explicit `register()` entry
+point.
+
 ```rust
 use pliron::context::Context;
-use dialect_llvm::register;
 
-let mut ctx = Context::new();
-register(&mut ctx);  // Registers all ops, types, and attributes
+let ctx = Context::default();  // ops, types, and attributes are already registered
 ```
 
 ## Source Layout
 
 ```text
 src/
-├── lib.rs              # Dialect registration
-├── types.rs            # 6 LLVM types + address_space constants
-├── attributes.rs       # 11 attribute types
-├── op_interfaces.rs    # Shared op interfaces
-├── export.rs           # LLVM IR text export + backend configs
-└── ops/
-    ├── mod.rs           # Op module registry
-    ├── arithmetic.rs    # Integer and float binary ops
-    ├── atomic.rs        # Atomic operations
-    ├── comparison.rs    # icmp, fcmp
-    ├── cast.rs          # 13 cast operations
-    ├── memory.rs        # alloca, load, store, GEP
-    ├── control_flow.rs  # Terminators and branches
-    ├── aggregate.rs     # extractvalue, insertvalue
-    ├── constants.rs     # Constant values
-    ├── symbol.rs        # Functions, globals, addressof
-    ├── call.rs          # call, call_intrinsic
-    ├── select.rs        # Conditional selection
-    ├── asm.rs           # Inline assembly
-    └── va.rs            # Variadic args
+├── lib.rs              # Shim: re-exports pliron-llvm + GPU-specific extensions
+└── export/
+    ├── mod.rs          # Export entry points + backend configs
+    ├── config.rs       # PtxExportConfig / NvvmExportConfig
+    ├── module.rs       # Top-level module emission
+    ├── function.rs     # Function bodies, block-arg to PHI translation
+    ├── ops.rs          # Per-op textual emission
+    ├── types.rs        # Type printing
+    ├── literals.rs     # Constant / literal printing
+    ├── metadata.rs     # !nvvm.annotations, launch bounds, cluster config
+    ├── externs.rs      # Intrinsic + device extern declarations
+    ├── names.rs        # SSA value / symbol naming
+    └── state.rs        # Export state tracking
 ```
 
 ## Further Reading
 
 - [dialect-mir](../dialect-mir/) -- pliron dialect modelling Rust MIR (lowering source)
 - [dialect-nvvm](../dialect-nvvm/) -- NVVM GPU intrinsics
-- [mir-lower](../mir-lower/) -- lowers `dialect-mir` → `dialect-llvm`
+- [mir-lower](../mir-lower/) -- lowers `dialect-mir` into the LLVM dialect

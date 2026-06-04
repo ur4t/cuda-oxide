@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Control flow operation conversion: `dialect-mir` → `dialect-llvm`.
+//! Control flow operation conversion: `dialect-mir` → LLVM dialect.
 //!
 //! Converts `dialect-mir` terminators and control flow operations to their
-//! `dialect-llvm` equivalents.
+//! LLVM dialect equivalents.
 //!
 //! # Operations
 //!

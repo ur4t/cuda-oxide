@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Aggregate operation conversion: `dialect-mir` → `dialect-llvm`.
+//! Aggregate operation conversion: `dialect-mir` → LLVM dialect.
 //!
 //! Converts `dialect-mir` aggregate operations (structs, tuples, enums) to
-//! their `dialect-llvm` equivalents.
+//! their LLVM dialect equivalents.
 //!
 //! # Operations
 //!

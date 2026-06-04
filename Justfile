@@ -22,7 +22,7 @@ clippy-fix:
 
 # Run unit tests (excludes rustc_private and device-only crates)
 test:
-    cargo test -p cuda-host -p cuda-macros -p dialect-llvm -p dialect-mir -p dialect-nvvm --lib --tests
+    cargo test -p cuda-host -p cuda-macros -p llvm-export -p dialect-mir -p dialect-nvvm --lib --tests
 
 # Run all checks (fmt + clippy + test)
 check: fmt-check clippy test
