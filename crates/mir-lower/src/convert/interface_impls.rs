@@ -382,7 +382,7 @@ impl MirToLlvmConversion for MirNeOp {
             operands_info,
             ICmpPredicateAttr::NE,
             ICmpPredicateAttr::NE,
-            FCmpPredicateAttr::ONE,
+            FCmpPredicateAttr::UNE,
         )
     }
 }
