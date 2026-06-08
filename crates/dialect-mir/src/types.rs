@@ -575,7 +575,7 @@ impl EnumVariant {
 /// * Discriminant type must be an integer type.
 #[pliron_type(
     name = "mir.enum",
-    format = "`<` $name `,` $discriminant_ty `,` `[` vec($variant_names, CharSpace(`,`)) `]` `,` `[` vec($variant_field_counts, CharSpace(`,`)) `]` `,` `[` vec($all_field_types, CharSpace(`,`)) `]` `>`"
+    format = "`<` $name `,` $discriminant_ty `,` `[` vec($variant_names, CharSpace(`,`)) `]` `,` `[` vec($variant_discriminants, CharSpace(`,`)) `]` `,` `[` vec($variant_field_counts, CharSpace(`,`)) `]` `,` `[` vec($all_field_types, CharSpace(`,`)) `]` `>`"
 )]
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
 pub struct MirEnumType {
@@ -585,6 +585,8 @@ pub struct MirEnumType {
     pub discriminant_ty: Ptr<TypeObj>,
     /// Variant names in order
     pub variant_names: Vec<String>,
+    /// Discriminant values in variant order
+    pub variant_discriminants: Vec<u64>,
     /// Number of fields for each variant (parallel to variant_names)
     pub variant_field_counts: Vec<u32>,
     /// All field types concatenated (use variant_field_counts to split)
@@ -597,6 +599,7 @@ impl MirEnumType {
         ctx: &mut Context,
         name: String,
         discriminant_ty: Ptr<TypeObj>,
+        variant_discriminants: Vec<u64>,
         variants: Vec<EnumVariant>,
     ) -> TypePtr<Self> {
         // Flatten variants into parallel vectors
@@ -615,6 +618,7 @@ impl MirEnumType {
                 name,
                 discriminant_ty,
                 variant_names,
+                variant_discriminants,
                 variant_field_counts,
                 all_field_types,
             },
@@ -686,6 +690,18 @@ impl Verify for MirEnumType {
             return verify_err!(
                 Location::Unknown,
                 "MirEnumType must have at least one variant"
+            );
+        }
+        if self.variant_names.len() != self.variant_discriminants.len() {
+            return verify_err!(
+                Location::Unknown,
+                "MirEnumType variant discriminant count must match variant count"
+            );
+        }
+        if self.variant_names.len() != self.variant_field_counts.len() {
+            return verify_err!(
+                Location::Unknown,
+                "MirEnumType variant field count must match variant count"
             );
         }
         Ok(())

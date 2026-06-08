@@ -36,10 +36,10 @@ use dialect_mir::attributes::MirCastKindAttr;
 use dialect_mir::attributes::MirFP16Attr;
 use dialect_mir::ops::{
     MirAddOp, MirBitAndOp, MirBitOrOp, MirBitXorOp, MirCastOp, MirCheckedAddOp, MirCheckedMulOp,
-    MirCheckedSubOp, MirConstructArrayOp, MirConstructEnumOp, MirConstructStructOp, MirDivOp,
-    MirEqOp, MirExtractFieldOp, MirGeOp, MirGlobalAllocOp, MirGtOp, MirLeOp, MirLoadOp, MirLtOp,
-    MirMulOp, MirNeOp, MirNegOp, MirNotOp, MirPtrOffsetOp, MirRefOp, MirRemOp, MirShlOp, MirShrOp,
-    MirSubOp,
+    MirCheckedSubOp, MirCmpOp, MirConstructArrayOp, MirConstructEnumOp, MirConstructStructOp,
+    MirDivOp, MirEqOp, MirExtractFieldOp, MirGeOp, MirGlobalAllocOp, MirGtOp, MirLeOp, MirLoadOp,
+    MirLtOp, MirMulOp, MirNeOp, MirNegOp, MirNotOp, MirPtrOffsetOp, MirRefOp, MirRemOp, MirShlOp,
+    MirShrOp, MirSubOp,
 };
 use dialect_mir::types::MirFP16Type;
 use pliron::basic_block::BasicBlock;
@@ -250,6 +250,7 @@ pub fn translate_rvalue(
     ctx: &mut Context,
     body: &mir::Body,
     rvalue: &mir::Rvalue,
+    expected_result_type: Option<Ptr<pliron::r#type::TypeObj>>,
     value_map: &mut ValueMap,
     block_ptr: Ptr<BasicBlock>,
     prev_op: Option<Ptr<Operation>>,
@@ -383,6 +384,17 @@ pub fn translate_rvalue(
                     MirNeOp::get_concrete_op_info(),
                     types::get_bool_type(ctx).to_ptr(),
                 ),
+                mir::BinOp::Cmp => (
+                    MirCmpOp::get_concrete_op_info(),
+                    expected_result_type.ok_or_else(|| {
+                        pliron::input_error!(
+                            loc.clone(),
+                            TranslationErr::unsupported(
+                                "BinaryOp Cmp requires the assignment destination type"
+                            )
+                        )
+                    })?,
+                ),
 
                 // Pointer offset - ptr.add(n) returns ptr + n * sizeof(element)
                 mir::BinOp::Offset => (
@@ -403,16 +415,6 @@ pub fn translate_rvalue(
                 mir::BinOp::BitAnd => (MirBitAndOp::get_concrete_op_info(), left_val.get_type(ctx)),
                 mir::BinOp::BitOr => (MirBitOrOp::get_concrete_op_info(), left_val.get_type(ctx)),
                 mir::BinOp::BitXor => (MirBitXorOp::get_concrete_op_info(), left_val.get_type(ctx)),
-
-                _ => {
-                    return input_err!(
-                        loc,
-                        TranslationErr::unsupported(format!(
-                            "BinaryOp {:?} not yet implemented",
-                            bin_op
-                        ))
-                    );
-                }
             };
 
             let op = Operation::new(

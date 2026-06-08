@@ -38,6 +38,7 @@ use pliron::context::{Context, Ptr};
 use pliron::r#type::TypeObj;
 use pliron::{input_err_noloc, input_error_noloc};
 use rustc_public::CrateDef;
+use rustc_public_bridge::IndexedVal;
 
 // Re-export types from dialect_mir for convenience
 pub use dialect_mir::types::{
@@ -515,23 +516,33 @@ pub fn translate_type(
                     .into())
                 } else {
                     // Enums have multiple variants
-                    // Determine discriminant type based on number of variants
-                    let discriminant_bits = if variants.len() <= 256 {
-                        8
-                    } else if variants.len() <= 65536 {
-                        16
-                    } else {
-                        32
+                    let discriminant_ty = match rust_ty.kind().discriminant_ty() {
+                        Some(discr_ty) => translate_type(ctx, &discr_ty)?,
+                        None => {
+                            let discriminant_bits = if variants.len() <= 256 {
+                                8
+                            } else if variants.len() <= 65536 {
+                                16
+                            } else {
+                                32
+                            };
+                            pliron::builtin::types::IntegerType::get(
+                                ctx,
+                                discriminant_bits,
+                                pliron::builtin::types::Signedness::Unsigned,
+                            )
+                            .into()
+                        }
                     };
-                    let discriminant_ty = pliron::builtin::types::IntegerType::get(
-                        ctx,
-                        discriminant_bits,
-                        pliron::builtin::types::Signedness::Unsigned,
-                    );
 
                     // Translate each variant
                     let mut enum_variants = Vec::with_capacity(variants.len());
-                    for variant in variants.iter() {
+                    let mut variant_discriminants = Vec::with_capacity(variants.len());
+                    for (idx, variant) in variants.iter().enumerate() {
+                        let variant_idx = rustc_public::ty::VariantIdx::to_val(idx);
+                        variant_discriminants
+                            .push(adt_def.discriminant_for_variant(variant_idx).val as u64);
+
                         let fields = variant.fields();
                         let mut field_types = Vec::with_capacity(fields.len());
                         for field in fields {
@@ -547,7 +558,8 @@ pub fn translate_type(
                     Ok(MirEnumType::get(
                         ctx,
                         trimmed_name.to_string(),
-                        discriminant_ty.into(),
+                        discriminant_ty,
+                        variant_discriminants,
                         enum_variants,
                     )
                     .into())

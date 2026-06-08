@@ -23,6 +23,8 @@ use pliron::{
 };
 use pliron_derive::pliron_op;
 
+use crate::types::MirEnumType;
+
 // ============================================================================
 // Relational Comparisons
 // ============================================================================
@@ -194,6 +196,39 @@ impl Verify for MirGeOp {
     }
 }
 
+#[pliron_op(
+    name = "mir.cmp",
+    format,
+    interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
+)]
+pub struct MirCmpOp;
+
+impl Verify for MirCmpOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = &*self.get_operation().deref(ctx);
+        let lhs = op.get_operand(0);
+        let rhs = op.get_operand(1);
+        let res = op.get_result(0);
+
+        let lhs_ty = lhs.get_type(ctx);
+        let rhs_ty = rhs.get_type(ctx);
+        if lhs_ty != rhs_ty {
+            return verify_err!(op.loc(), "MirCmpOp operands must be of the same type");
+        }
+
+        let res_ty = res.get_type(ctx);
+        let res_ty_obj = res_ty.deref(ctx);
+        let Some(enum_ty) = res_ty_obj.downcast_ref::<MirEnumType>() else {
+            return verify_err!(op.loc(), "MirCmpOp result must be an enum type");
+        };
+        if enum_ty.variant_count() != 3 {
+            return verify_err!(op.loc(), "MirCmpOp result enum must have three variants");
+        }
+
+        Ok(())
+    }
+}
+
 // ============================================================================
 // Equality Comparisons
 // ============================================================================
@@ -284,6 +319,7 @@ pub fn register(ctx: &mut Context) {
     MirLeOp::register(ctx);
     MirGtOp::register(ctx);
     MirGeOp::register(ctx);
+    MirCmpOp::register(ctx);
     MirEqOp::register(ctx);
     MirNeOp::register(ctx);
 }
