@@ -517,7 +517,13 @@ pub(crate) fn build_struct_slot_map(
         llvm_fields.push(llvm_ty);
 
         if has_explicit_layout {
-            current_offset += get_type_size(ctx, llvm_ty);
+            // Prefer rustc's stored size for the field over the LLVM-level
+            // approximation: nested aggregates carry interior/trailing
+            // padding the converted type cannot always reproduce, and a
+            // wrong advance here either forces interior padding where
+            // rustc has none or overshoots the next field's offset.
+            current_offset += mir_stored_size(ctx, layout.field_types[decl_idx])
+                .unwrap_or_else(|| get_type_size(ctx, llvm_ty));
         }
     }
 
@@ -540,10 +546,40 @@ fn make_padding_type(ctx: &mut Context, size: u64) -> Ptr<TypeObj> {
     llvm_types::ArrayType::get(ctx, i8_ty.into(), size).into()
 }
 
+/// Size of a MIR-level type from rustc layout truth, when stored.
+///
+/// `MirStructType` carries `total_size` (interior and trailing padding
+/// included) straight from rustc's layout query; arrays of such structs
+/// multiply it out. Returns `None` when no stored size is available and
+/// the caller must fall back to the LLVM-level approximation.
+///
+/// `MirEnumType` intentionally falls through to `None`: enums do not
+/// carry a rustc size yet (enum layout totals are being added on the
+/// PR #119 branch), so their size stays approximated from the lowered
+/// `{ discr, fields... }` struct.
+fn mir_stored_size(ctx: &Context, mir_ty: Ptr<TypeObj>) -> Option<u64> {
+    let ty_ref = mir_ty.deref(ctx);
+    if let Some(s) = ty_ref.downcast_ref::<MirStructType>() {
+        if s.total_size() > 0 {
+            return Some(s.total_size());
+        }
+        return None;
+    }
+    if let Some(a) = ty_ref.downcast_ref::<dialect_mir::types::MirArrayType>() {
+        let elem_ty = a.element_ty;
+        let size = a.size;
+        return mir_stored_size(ctx, elem_ty).map(|elem_size| elem_size * size);
+    }
+    None
+}
+
 /// Get the size of an LLVM type in bytes (approximate).
 ///
-/// This is used for computing padding. For most types we know the exact size;
-/// for complex types we make reasonable assumptions.
+/// This is used for computing padding. For most types we know the exact
+/// size. For structs the sum of field sizes is exact when the struct was
+/// built with explicit padding (the pads are real fields) but an
+/// approximation otherwise; prefer [`mir_stored_size`] whenever the MIR
+/// type is at hand.
 fn get_type_size(ctx: &Context, ty: Ptr<TypeObj>) -> u64 {
     let ty_ref = ty.deref(ctx);
 
@@ -574,7 +610,8 @@ fn get_type_size(ctx: &Context, ty: Ptr<TypeObj>) -> u64 {
         return elem_size * arr_ty.size();
     }
 
-    // Struct types (sum of field sizes - approximation)
+    // Struct types: sum of field sizes. Exact for explicitly-padded
+    // structs (pads are real [N x i8] fields); an approximation otherwise.
     if let Some(struct_ty) = ty_ref.downcast_ref::<llvm_types::StructType>() {
         return struct_ty.fields().map(|f| get_type_size(ctx, f)).sum();
     }
