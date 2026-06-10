@@ -5,13 +5,10 @@
 
 use std::{env, error::Error, path::Path, path::PathBuf, process::exit};
 
-/// Returns the CUDA toolkit install root: `CUDA_TOOLKIT_PATH` or `CUDA_HOME` if set,
-/// otherwise `/usr/local/cuda`. Used for include paths, library search paths,
-/// and bindgen’s Clang configuration.
+/// Returns the CUDA toolkit install root: `CUDA_TOOLKIT_PATH` if set, otherwise `/usr/local/cuda`.
+/// Used for include paths, library search paths, and bindgen’s Clang configuration.
 fn cuda_toolkit_dir() -> String {
-    env::var("CUDA_TOOLKIT_PATH")
-        .or_else(|_| env::var("CUDA_HOME"))
-        .unwrap_or_else(|_| "/usr/local/cuda".to_string())
+    env::var("CUDA_TOOLKIT_PATH").unwrap_or_else(|_| "/usr/local/cuda".to_string())
 }
 
 /// Runs [`run`]; on error, prints the message and exits with status 1.
@@ -28,28 +25,8 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-env-changed=CUDA_TOOLKIT_PATH");
-    println!("cargo:rerun-if-env-changed=CUDA_HOME");
-    println!("cargo::rustc-check-cfg=cfg(cuda_has_cuEventElapsedTime_v2)");
 
     let toolkit = cuda_toolkit_dir();
-    let cuda_h = Path::new(&toolkit).join("include/cuda.h");
-    println!("cargo:rerun-if-changed={}", cuda_h.display());
-
-    match std::fs::read_to_string(&cuda_h) {
-        Ok(contents) => {
-            if contents.contains("cuEventElapsedTime_v2") {
-                println!("cargo:rustc-cfg=cuda_has_cuEventElapsedTime_v2");
-            }
-        }
-        Err(err) => {
-            println!(
-                "cargo:warning=cuda-bindings: Could not read cuda.h at {}: {}",
-                cuda_h.display(),
-                err
-            );
-        }
-    }
-
     for path in collect_lib_paths(&toolkit) {
         println!("cargo:rustc-link-search=native={}", path.display());
     }
