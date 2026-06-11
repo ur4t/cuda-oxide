@@ -180,6 +180,7 @@ struct CudaModuleKernel {
     generics: syn::Generics,
     params: Vec<CudaModuleParam>,
     cluster_dim: Option<(u32, u32, u32)>,
+    cooperative: bool,
     is_generic: bool,
 }
 
@@ -350,6 +351,7 @@ fn collect_cuda_module_kernels(items: &[Item]) -> syn::Result<Vec<CudaModuleKern
             continue;
         }
         let cluster_dim = cuda_module_cluster_dim(&item_fn.attrs)?;
+        let cooperative = cuda_module_cooperative(&item_fn.attrs)?;
         let params = cuda_module_params(item_fn)?;
         let is_generic = item_fn
             .sig
@@ -366,6 +368,7 @@ fn collect_cuda_module_kernels(items: &[Item]) -> syn::Result<Vec<CudaModuleKern
             generics: item_fn.sig.generics.clone(),
             params,
             cluster_dim,
+            cooperative,
             is_generic,
         });
     }
@@ -669,6 +672,21 @@ fn cuda_module_cluster_dim(attrs: &[syn::Attribute]) -> syn::Result<Option<(u32,
     Ok(None)
 }
 
+fn cuda_module_cooperative(attrs: &[syn::Attribute]) -> syn::Result<bool> {
+    for attr in attrs {
+        if attr_path_ends_with(attr, "cooperative_launch") {
+            if !matches!(attr.meta, syn::Meta::Path(_)) {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "cooperative_launch takes no arguments: use a bare #[cooperative_launch]",
+                ));
+            }
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn cuda_module_params(item_fn: &ItemFn) -> syn::Result<Vec<CudaModuleParam>> {
     item_fn
         .sig
@@ -845,6 +863,11 @@ fn generate_cuda_module_async_launch_method(kernel: &CudaModuleKernel) -> TokenS
             ::cuda_host::set_async_kernel_cluster_dim(&mut __launch, #cluster_dim);
         }
     });
+    let set_cooperative = kernel.cooperative.then(|| {
+        quote! {
+            ::cuda_host::set_async_kernel_cooperative(&mut __launch, true);
+        }
+    });
 
     quote! {
         #(#cfg_attrs)*
@@ -860,6 +883,7 @@ fn generate_cuda_module_async_launch_method(kernel: &CudaModuleKernel) -> TokenS
             #function_binding
             let mut __launch = ::cuda_host::new_async_kernel_launch(__func.clone(), config);
             #set_cluster_dim
+            #set_cooperative
             #(#arg_marshalling)*
             Ok(__launch)
         }
@@ -903,6 +927,11 @@ fn generate_cuda_module_owned_async_launch_method(kernel: &CudaModuleKernel) -> 
             ::cuda_host::set_async_kernel_cluster_dim(&mut __launch, #cluster_dim);
         }
     });
+    let set_cooperative = kernel.cooperative.then(|| {
+        quote! {
+            ::cuda_host::set_async_kernel_cooperative(&mut __launch, true);
+        }
+    });
     let resources_ty = cuda_module_owned_resources_ty(&resources);
     let resource_names = resources.iter().map(|(_, name, _, _)| name);
     let resources_expr = if resources.is_empty() {
@@ -926,6 +955,7 @@ fn generate_cuda_module_owned_async_launch_method(kernel: &CudaModuleKernel) -> 
             let mut __launch: ::cuda_host::AsyncKernelLaunch<'static> =
                 ::cuda_host::new_async_kernel_launch(__func.clone(), config);
             #set_cluster_dim
+            #set_cooperative
             #(#arg_marshalling)*
             Ok(::cuda_host::new_owned_async_kernel_launch(__launch, #resources_expr))
         }
@@ -1160,8 +1190,21 @@ fn cuda_module_function_binding(kernel: &CudaModuleKernel) -> TokenStream2 {
 
 fn cuda_module_launch_call(kernel: &CudaModuleKernel) -> TokenStream2 {
     let cluster_dim = kernel.cluster_dim.map(|(x, y, z)| quote! { (#x, #y, #z) });
-    if let Some(cluster_dim) = cluster_dim {
-        quote! {
+    match (cluster_dim, kernel.cooperative) {
+        (Some(cluster_dim), true) => quote! {
+            unsafe {
+                ::cuda_core::launch_kernel_ex_cooperative_on_stream(
+                    __func,
+                    config.grid_dim,
+                    config.block_dim,
+                    config.shared_mem_bytes,
+                    #cluster_dim,
+                    stream,
+                    &mut __args,
+                )
+            }
+        },
+        (Some(cluster_dim), false) => quote! {
             unsafe {
                 ::cuda_core::launch_kernel_ex_on_stream(
                     __func,
@@ -1173,9 +1216,20 @@ fn cuda_module_launch_call(kernel: &CudaModuleKernel) -> TokenStream2 {
                     &mut __args,
                 )
             }
-        }
-    } else {
-        quote! {
+        },
+        (None, true) => quote! {
+            unsafe {
+                ::cuda_core::launch_kernel_cooperative_on_stream(
+                    __func,
+                    config.grid_dim,
+                    config.block_dim,
+                    config.shared_mem_bytes,
+                    stream,
+                    &mut __args,
+                )
+            }
+        },
+        (None, false) => quote! {
             unsafe {
                 ::cuda_core::launch_kernel_on_stream(
                     __func,
@@ -1186,7 +1240,7 @@ fn cuda_module_launch_call(kernel: &CudaModuleKernel) -> TokenStream2 {
                     &mut __args,
                 )
             }
-        }
+        },
     }
 }
 
@@ -2331,6 +2385,70 @@ impl Parse for ClusterArgs {
             )),
         }
     }
+}
+
+/// Marks a kernel for cooperative launch (`CU_LAUNCH_ATTRIBUTE_COOPERATIVE`).
+///
+/// A cooperative launch guarantees that every block in the grid is
+/// co-resident on the device, which is the precondition for grid-wide
+/// barriers: without it, `cuda_device::grid::sync()` deadlocks (or reads a
+/// null grid-workspace pointer) because blocks that have not been scheduled
+/// yet can never reach the barrier.
+///
+/// Unlike `#[cluster_launch]`, this attribute changes nothing in the
+/// generated PTX. Cooperative-ness is purely a launch-time property: the
+/// `#[cuda_module]` macro reads this marker and routes every generated
+/// launch method through `cuLaunchKernelEx` with the cooperative attribute
+/// set, instead of plain `cuLaunchKernel`.
+///
+/// # Usage
+///
+/// ```ignore
+/// use cuda_device::{cooperative_launch, grid, kernel, DisjointSlice};
+///
+/// #[kernel]
+/// #[cooperative_launch]
+/// pub fn my_grid_sync_kernel(mut out: DisjointSlice<u32>) {
+///     // ... per-block work ...
+///     grid::sync();
+///     // ... grid-wide post-barrier work ...
+/// }
+/// ```
+///
+/// # Requirements
+///
+/// - Must be used WITH `#[kernel]` (not standalone), on a kernel inside a
+///   `#[cuda_module]` module
+/// - The `#[cooperative_launch]` attribute must come AFTER `#[kernel]`
+/// - The device must support cooperative launch
+///   (`CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH`)
+/// - The grid must fit on the device in one wave, otherwise the driver
+///   rejects the launch with `CUDA_ERROR_COOPERATIVE_LAUNCH_TOO_LARGE`
+///
+/// May be combined with `#[cluster_launch(x, y, z)]`; both launch
+/// attributes are then passed to `cuLaunchKernelEx` in the same call.
+///
+/// Outside `#[cuda_module]`, the legacy `cuda_launch!` macro offers the
+/// same behaviour through its `cooperative: true` field.
+#[proc_macro_attribute]
+pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "cooperative_launch takes no arguments: use a bare #[cooperative_launch]",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    // Launch-time only: the marker is consumed by #[cuda_module]; the kernel
+    // body and PTX are unchanged. Parse as a function so misuse on other
+    // items is rejected with a clear error.
+    let input = parse_macro_input!(item as ItemFn);
+    quote! {
+        #input
+    }
+    .into()
 }
 
 /// Marks a function as a CUDA device function.
@@ -3492,4 +3610,127 @@ pub fn cuda_launch_async(input: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Expands a `#[cuda_module]` body and returns the generated tokens as a
+    /// whitespace-free string, so tests can assert on call paths without
+    /// caring how `quote!` spaces out `::` separators.
+    fn expand_to_compact_string(module: ItemMod) -> String {
+        expand_cuda_module(module)
+            .expect("cuda_module expansion failed")
+            .to_string()
+            .replace(' ', "")
+    }
+
+    #[test]
+    fn cooperative_kernel_launches_through_cooperative_driver_call() {
+        let module: ItemMod = parse_quote! {
+            mod kernels {
+                #[kernel]
+                #[cooperative_launch]
+                pub fn grid_sync_kernel(mut out: DisjointSlice<u32>) {}
+            }
+        };
+        let expanded = expand_to_compact_string(module);
+
+        // The sync launch method must route through the cooperative driver
+        // entry point (cuLaunchKernelEx + CU_LAUNCH_ATTRIBUTE_COOPERATIVE)
+        // instead of plain cuLaunchKernel.
+        assert!(
+            expanded.contains("launch_kernel_cooperative_on_stream"),
+            "expected cooperative launch call in generated tokens:\n{expanded}"
+        );
+        assert!(
+            !expanded.contains("launch_kernel_on_stream"),
+            "plain launch call should be replaced by the cooperative one:\n{expanded}"
+        );
+    }
+
+    #[test]
+    fn plain_kernel_keeps_plain_driver_call() {
+        let module: ItemMod = parse_quote! {
+            mod kernels {
+                #[kernel]
+                pub fn plain_kernel(mut out: DisjointSlice<u32>) {}
+            }
+        };
+        let expanded = expand_to_compact_string(module);
+
+        assert!(
+            expanded.contains("launch_kernel_on_stream"),
+            "expected plain launch call in generated tokens:\n{expanded}"
+        );
+        assert!(
+            !expanded.contains("launch_kernel_cooperative_on_stream"),
+            "cooperative call must not appear without #[cooperative_launch]:\n{expanded}"
+        );
+    }
+
+    #[test]
+    fn cooperative_plus_cluster_kernel_uses_combined_driver_call() {
+        let module: ItemMod = parse_quote! {
+            mod kernels {
+                #[kernel]
+                #[cluster_launch(2, 1, 1)]
+                #[cooperative_launch]
+                pub fn clustered_grid_sync_kernel(mut out: DisjointSlice<u32>) {}
+            }
+        };
+        let expanded = expand_to_compact_string(module);
+
+        // cuLaunchKernelEx accepts both attributes in one attrs array, so the
+        // combination is allowed and routes through the combined helper.
+        assert!(
+            expanded.contains("launch_kernel_ex_cooperative_on_stream"),
+            "expected combined cluster+cooperative launch call:\n{expanded}"
+        );
+        assert!(
+            !expanded.contains("launch_kernel_ex_on_stream"),
+            "cluster-only call should be replaced by the combined one:\n{expanded}"
+        );
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn cooperative_kernel_sets_async_builder_knob() {
+        let module: ItemMod = parse_quote! {
+            mod kernels {
+                #[kernel]
+                #[cooperative_launch]
+                pub fn grid_sync_kernel(mut out: DisjointSlice<u32>) {}
+            }
+        };
+        let expanded = expand_to_compact_string(module);
+
+        // Both the borrowed-async and owned-async builder methods set the
+        // cooperative knob, exactly like set_async_kernel_cluster_dim is set
+        // for #[cluster_launch].
+        assert_eq!(
+            expanded.matches("set_async_kernel_cooperative").count(),
+            2,
+            "expected the cooperative knob in both async builder methods:\n{expanded}"
+        );
+    }
+
+    #[test]
+    fn cooperative_launch_with_arguments_is_rejected() {
+        let module: ItemMod = parse_quote! {
+            mod kernels {
+                #[kernel]
+                #[cooperative_launch(4)]
+                pub fn grid_sync_kernel(mut out: DisjointSlice<u32>) {}
+            }
+        };
+        let error = expand_cuda_module(module).expect_err("expected expansion to fail");
+        assert!(
+            error
+                .to_string()
+                .contains("cooperative_launch takes no arguments"),
+            "unexpected error message: {error}"
+        );
+    }
 }

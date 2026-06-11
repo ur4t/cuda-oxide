@@ -2,8 +2,9 @@
 
 Procedural macros for writing CUDA kernels in Rust. Provides `#[cuda_module]`
 for typed embedded-module loading, `#[kernel]` for GPU entry points,
-`#[device]`, `#[launch_bounds]`, `#[cluster_launch]`, `gpu_printf!`, and the
-lower-level `cuda_launch!` / `cuda_launch_async!` migration macros.
+`#[device]`, `#[launch_bounds]`, `#[cluster_launch]`, `#[cooperative_launch]`,
+`gpu_printf!`, and the lower-level `cuda_launch!` / `cuda_launch_async!`
+migration macros.
 
 ## Attributes
 
@@ -89,6 +90,26 @@ Compile-time thread block cluster dimensions (Hopper+). Must come **after** `#[k
 #[cluster_launch(4, 1, 1)]  // 4 blocks per cluster
 pub fn cluster_kernel(out: DisjointSlice<u32>) { ... }
 // PTX: .entry cluster_kernel .reqnctapercluster 4, 1, 1 { ... }
+```
+
+### `#[cooperative_launch]`
+
+Marks a kernel for cooperative launch, the precondition for grid-wide
+barriers (`cuda_device::grid::sync()`). Must come **after** `#[kernel]`.
+Unlike `#[cluster_launch]` this changes nothing in the PTX: `#[cuda_module]`
+reads the marker and routes every generated launch method through
+`cuLaunchKernelEx` with `CU_LAUNCH_ATTRIBUTE_COOPERATIVE` set. May be
+combined with `#[cluster_launch]`; both attributes then go into the same
+`cuLaunchKernelEx` call.
+
+```rust
+#[kernel]
+#[cooperative_launch]
+pub fn grid_sync_kernel(mut out: DisjointSlice<u32>) {
+    // ... per-block work ...
+    grid::sync();
+    // ... grid-wide post-barrier work ...
+}
 ```
 
 ### `#[convergent]`, `#[pure]`, `#[readonly]`
