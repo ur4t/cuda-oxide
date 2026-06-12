@@ -41,7 +41,7 @@
 
 use libloading::{Library, Symbol};
 use std::ffi::{CString, c_char, c_int, c_void};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use thiserror::Error;
 
@@ -113,6 +113,17 @@ pub enum NvvmError {
         /// `nvvmGetErrorString`. `None` only if both were unavailable.
         log: Option<String>,
     },
+}
+
+/// `libdevice.10.bc` could not be located on this system. `tried` lists
+/// every path that was probed, in order, joined by newlines.
+#[derive(Debug, Error)]
+#[error(
+    "Could not locate libdevice.10.bc. Set CUDA_OXIDE_LIBDEVICE, CUDA_TOOLKIT_PATH, or CUDA_HOME, or install the CUDA Toolkit. Tried:\n  {tried}"
+)]
+pub struct LibdeviceNotFound {
+    /// Newline-joined list of paths that were probed.
+    pub tried: String,
 }
 
 // ============================================================================
@@ -416,6 +427,52 @@ fn cuda_roots_from_env(mut get_env: impl FnMut(&str) -> Option<String>) -> Vec<P
     roots
 }
 
+// ============================================================================
+// libdevice discovery
+// ============================================================================
+
+/// Locate `libdevice.10.bc` from the CUDA Toolkit.
+///
+/// libdevice ships in the toolkit's `nvvm/` component alongside `libnvvm.so`
+/// and is consumed together with libNVVM in the LTOIR pipeline, so its
+/// discovery lives here next to the library discovery in [`LibNvvm::load`].
+///
+/// Search order:
+/// 1. `CUDA_OXIDE_LIBDEVICE` env var (used as-is if it points to an
+///    existing file).
+/// 2. `<root>/nvvm/libdevice/libdevice.10.bc` for `<root>` in
+///    `CUDA_TOOLKIT_PATH`, `CUDA_HOME`, `CUDA_PATH`, `/usr/local/cuda`,
+///    `/opt/cuda`.
+///
+/// Returns [`LibdeviceNotFound`] with the full list of probed paths if
+/// nothing matches.
+pub fn find_libdevice() -> Result<PathBuf, LibdeviceNotFound> {
+    find_libdevice_with(|var| std::env::var(var).ok(), |path| path.exists())
+}
+
+fn find_libdevice_with(
+    mut get_env: impl FnMut(&str) -> Option<String>,
+    mut exists: impl FnMut(&Path) -> bool,
+) -> Result<PathBuf, LibdeviceNotFound> {
+    if let Some(p) = get_env("CUDA_OXIDE_LIBDEVICE") {
+        let path = PathBuf::from(p);
+        if exists(&path) {
+            return Ok(path);
+        }
+    }
+    let mut tried = Vec::new();
+    for root in cuda_roots_from_env(&mut get_env) {
+        let candidate = root.join("nvvm/libdevice/libdevice.10.bc");
+        tried.push(candidate.display().to_string());
+        if exists(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(LibdeviceNotFound {
+        tried: tried.join("\n  "),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,5 +496,57 @@ mod tests {
                 PathBuf::from("/opt/cuda"),
             ]
         );
+    }
+
+    #[test]
+    fn find_libdevice_honors_explicit_override_file() {
+        let found = find_libdevice_with(
+            |var| (var == "CUDA_OXIDE_LIBDEVICE").then(|| "/elsewhere/libdevice.10.bc".to_string()),
+            |path| path == Path::new("/elsewhere/libdevice.10.bc"),
+        );
+
+        assert_eq!(found.unwrap(), PathBuf::from("/elsewhere/libdevice.10.bc"));
+    }
+
+    #[test]
+    fn find_libdevice_probes_roots_in_order() {
+        // CUDA_HOME has the file, but CUDA_TOOLKIT_PATH is probed first and
+        // also has it; the first match must win.
+        let found = find_libdevice_with(
+            |var| match var {
+                "CUDA_TOOLKIT_PATH" => Some("/cuda/toolkit".to_string()),
+                "CUDA_HOME" => Some("/cuda/home".to_string()),
+                _ => None,
+            },
+            |path| {
+                path == Path::new("/cuda/toolkit/nvvm/libdevice/libdevice.10.bc")
+                    || path == Path::new("/cuda/home/nvvm/libdevice/libdevice.10.bc")
+            },
+        );
+
+        assert_eq!(
+            found.unwrap(),
+            PathBuf::from("/cuda/toolkit/nvvm/libdevice/libdevice.10.bc")
+        );
+    }
+
+    #[test]
+    fn find_libdevice_failure_lists_every_probed_path() {
+        let err = find_libdevice_with(
+            |var| (var == "CUDA_HOME").then(|| "/cuda/home".to_string()),
+            |_| false,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.tried,
+            "/cuda/home/nvvm/libdevice/libdevice.10.bc\n  \
+             /usr/local/cuda/nvvm/libdevice/libdevice.10.bc\n  \
+             /opt/cuda/nvvm/libdevice/libdevice.10.bc"
+        );
+        let message = err.to_string();
+        assert!(message.contains("CUDA_OXIDE_LIBDEVICE"));
+        assert!(message.contains("CUDA_TOOLKIT_PATH"));
+        assert!(message.contains("CUDA_HOME"));
     }
 }

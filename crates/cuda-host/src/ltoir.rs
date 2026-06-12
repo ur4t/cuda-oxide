@@ -296,24 +296,12 @@ pub fn load_kernel_module(
 ///
 /// Returns [`LtoirError::LibdeviceNotFound`] with the full list of probed
 /// paths if nothing matches.
+///
+/// Thin wrapper over [`libnvvm_sys::find_libdevice`], which owns the probe
+/// (libdevice ships in the toolkit's `nvvm/` component next to `libnvvm.so`).
 pub fn find_libdevice() -> Result<PathBuf, LtoirError> {
-    if let Ok(p) = std::env::var("CUDA_OXIDE_LIBDEVICE") {
-        let path = PathBuf::from(p);
-        if path.exists() {
-            return Ok(path);
-        }
-    }
-    let mut tried = Vec::new();
-    for root in cuda_roots() {
-        let candidate = root.join("nvvm/libdevice/libdevice.10.bc");
-        tried.push(candidate.display().to_string());
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-    Err(LtoirError::LibdeviceNotFound {
-        tried: tried.join("\n  "),
-    })
+    libnvvm_sys::find_libdevice()
+        .map_err(|libnvvm_sys::LibdeviceNotFound { tried }| LtoirError::LibdeviceNotFound { tried })
 }
 
 /// Read the GPU arch (`sm_XX`) for the cubin build, defaulting to `sm_120`
@@ -352,22 +340,6 @@ fn manifest_dir() -> PathBuf {
 // Internal utilities
 // ============================================================================
 
-fn cuda_roots() -> Vec<PathBuf> {
-    cuda_roots_from_env(|var| std::env::var(var).ok())
-}
-
-fn cuda_roots_from_env(mut get_env: impl FnMut(&str) -> Option<String>) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    for var in ["CUDA_TOOLKIT_PATH", "CUDA_HOME", "CUDA_PATH"] {
-        if let Some(r) = get_env(var) {
-            roots.push(PathBuf::from(r));
-        }
-    }
-    roots.push(PathBuf::from("/usr/local/cuda"));
-    roots.push(PathBuf::from("/opt/cuda"));
-    roots
-}
-
 /// Convert `sm_120` to `compute_120`. Returns the input unchanged if it
 /// doesn't start with `sm_`.
 fn sm_to_compute(arch: &str) -> String {
@@ -395,30 +367,4 @@ fn needs_rebuild(target: &Path, sources: &[&Path]) -> bool {
         }
     }
     false
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cuda_roots_prefers_project_toolkit_env_var() {
-        let roots = cuda_roots_from_env(|var| match var {
-            "CUDA_TOOLKIT_PATH" => Some("/cuda/toolkit".to_string()),
-            "CUDA_HOME" => Some("/cuda/home".to_string()),
-            "CUDA_PATH" => Some("/cuda/path".to_string()),
-            _ => None,
-        });
-
-        assert_eq!(
-            roots,
-            vec![
-                PathBuf::from("/cuda/toolkit"),
-                PathBuf::from("/cuda/home"),
-                PathBuf::from("/cuda/path"),
-                PathBuf::from("/usr/local/cuda"),
-                PathBuf::from("/opt/cuda"),
-            ]
-        );
-    }
 }
