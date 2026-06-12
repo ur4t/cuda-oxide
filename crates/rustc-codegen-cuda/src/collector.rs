@@ -420,8 +420,16 @@ pub fn is_fully_monomorphized<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>)
 /// emits an `__nv_*` libdevice call instead, and the collector silently
 /// skips them here so the std-crate guard doesn't fire.
 ///
-/// Keep this list in sync with the matches in
+/// Keep this list in sync with the `std::sys::cmath` matches in
 /// `mir-importer/src/translator/terminator/intrinsics/float_math.rs`.
+///
+/// Only `std::`-crate paths belong here: the guard is consulted solely
+/// inside the forbidden-std branch of `should_collect_from_crate`, where
+/// every def path starts with `std::`. Intrinsic-lowered shims that live
+/// in `core` (e.g. the `core::num::imp::libm::cbrtf` / `cbrt` extern
+/// declarations that back `f{32,64}::cbrt` on the pinned toolchain) never
+/// need an entry: `core` is an allowed crate, and the declarations have
+/// no MIR, so the collector's no-MIR skip already excludes them.
 fn is_intrinsic_lowered_cmath_shim(fn_path: &str) -> bool {
     matches!(
         fn_path,
@@ -429,6 +437,8 @@ fn is_intrinsic_lowered_cmath_shim(fn_path: &str) -> bool {
             | "std::sys::cmath::atan2"
             | "std::sys::cmath::atanf"
             | "std::sys::cmath::atan"
+            | "std::sys::cmath::cbrtf"
+            | "std::sys::cmath::cbrt"
     )
 }
 

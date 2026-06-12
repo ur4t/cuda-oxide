@@ -219,6 +219,8 @@ enum RustFloatMathIntrinsic {
     Atan2F64,
     AtanF32,
     AtanF64,
+    CbrtF32,
+    CbrtF64,
 }
 
 impl RustFloatMathIntrinsic {
@@ -272,6 +274,8 @@ impl RustFloatMathIntrinsic {
             rust_intrinsics::CALLEE_ATAN2_F64 => Some(Self::Atan2F64),
             rust_intrinsics::CALLEE_ATAN_F32 => Some(Self::AtanF32),
             rust_intrinsics::CALLEE_ATAN_F64 => Some(Self::AtanF64),
+            rust_intrinsics::CALLEE_CBRT_F32 => Some(Self::CbrtF32),
+            rust_intrinsics::CALLEE_CBRT_F64 => Some(Self::CbrtF64),
             _ => None,
         }
     }
@@ -336,6 +340,8 @@ impl RustFloatMathIntrinsic {
             Self::Atan2F64 => Ok("__nv_atan2"),
             Self::AtanF32 => Ok("__nv_atanf"),
             Self::AtanF64 => Ok("__nv_atan"),
+            Self::CbrtF32 => Ok("__nv_cbrtf"),
+            Self::CbrtF64 => Ok("__nv_cbrt"),
         }
     }
 
@@ -1388,6 +1394,14 @@ mod tests {
                 rust_intrinsics::CALLEE_ATAN_F64,
                 RustFloatMathIntrinsic::AtanF64,
             ),
+            (
+                rust_intrinsics::CALLEE_CBRT_F32,
+                RustFloatMathIntrinsic::CbrtF32,
+            ),
+            (
+                rust_intrinsics::CALLEE_CBRT_F64,
+                RustFloatMathIntrinsic::CbrtF64,
+            ),
         ];
 
         for (name, expected) in cases {
@@ -1416,6 +1430,8 @@ mod tests {
         assert_eq!(RustFloatMathIntrinsic::Atan2F64.arg_count(), 2);
         assert_eq!(RustFloatMathIntrinsic::AtanF32.arg_count(), 1);
         assert_eq!(RustFloatMathIntrinsic::AtanF64.arg_count(), 1);
+        assert_eq!(RustFloatMathIntrinsic::CbrtF32.arg_count(), 1);
+        assert_eq!(RustFloatMathIntrinsic::CbrtF64.arg_count(), 1);
         assert_eq!(RustFloatMathIntrinsic::FmaF32.arg_count(), 3);
         assert_eq!(RustFloatMathIntrinsic::FmuladdF64.arg_count(), 3);
         assert_eq!(RustFloatMathIntrinsic::MaxNumNszF32.arg_count(), 2);
