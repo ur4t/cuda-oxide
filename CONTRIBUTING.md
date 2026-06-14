@@ -5,6 +5,14 @@ explains the contribution process and requirements.
 
 cuda-oxide is licensed under the [Apache License, Version 2.0](LICENSE).
 
+## Community
+
+Join the project Discord for questions, design discussions, and announcements:
+**[discord.gg/Fua7DeKnm](https://discord.gg/Fua7DeKnm)**
+
+If you are unsure whether something is worth a full issue or PR, the Discord
+`#contributors` channel is a good place to ask first.
+
 ## Table of Contents
 
 - [Developer Certificate of Origin](#developer-certificate-of-origin)
