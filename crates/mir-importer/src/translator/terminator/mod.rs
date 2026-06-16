@@ -1784,6 +1784,25 @@ fn try_dispatch_intrinsic(
                 name,
             )?))
         }
+        "core::intrinsics::volatile_load" | "std::intrinsics::volatile_load" => {
+            Ok(Some(intrinsics::memory::emit_volatile_load(
+                ctx,
+                body,
+                args,
+                destination,
+                target,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+            )?))
+        }
+        "core::intrinsics::volatile_store" | "std::intrinsics::volatile_store" => {
+            Ok(Some(intrinsics::memory::emit_volatile_store(
+                ctx, body, args, target, block_ptr, prev_op, value_map, block_map, loc,
+            )?))
+        }
 
         "core::intrinsics::ptr_offset_from" | "std::intrinsics::ptr_offset_from" => {
             Ok(Some(intrinsics::memory::emit_ptr_offset_from(
