@@ -914,3 +914,60 @@ fn assert_no_undefined_temporaries(ir: &str) {
         "IR references undefined SSA temporaries: {undefined:?}\nIR:\n{ir}"
     );
 }
+
+/// A float binop carrying `FastmathFlags` must export with the matching LLVM
+/// fast-math keyword (`fast` for the all-bits set), while a float binop with no
+/// flags must export with none. Regression guard: the textual exporter
+/// previously dropped fast-math flags entirely, making the `f*_fast` intrinsic
+/// lowering inert end to end.
+#[test]
+fn export_emits_fast_math_flags_only_on_flagged_float_ops() {
+    use llvm_export::attributes::FastmathFlags;
+    use llvm_export::op_interfaces::{BinArithOp, FloatBinArithOpWithFastMathFlags};
+    use llvm_export::ops::{FAddOp, FMulOp};
+    use pliron::builtin::types::FP32Type;
+
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "test_module".try_into().unwrap());
+    let module_region = module.get_operation().deref(&ctx).get_region(0);
+    let module_block = module_region.deref(&ctx).iter(&ctx).next().unwrap();
+
+    let f32_ty = FP32Type::get(&ctx);
+    let void_ty = VoidType::get(&ctx);
+    let func_ty = FuncType::get(
+        &mut ctx,
+        void_ty.to_ptr(),
+        vec![f32_ty.into(), f32_ty.into()],
+        false,
+    );
+    let func = FuncOp::new(&mut ctx, "fast_math".try_into().unwrap(), func_ty);
+    let entry = func.get_or_create_entry_block(&mut ctx);
+    let a = entry.deref(&ctx).get_argument(0);
+    let b = entry.deref(&ctx).get_argument(1);
+
+    // fadd with the full fast-math set.
+    let fadd = FAddOp::new_with_fast_math_flags(&mut ctx, a, b, FastmathFlags::FAST.into());
+    fadd.get_operation().insert_at_back(entry, &ctx);
+    // fmul with no flags: must stay flag-free.
+    let fmul = FMulOp::new(&mut ctx, a, b);
+    fmul.get_operation().insert_at_back(entry, &ctx);
+    ReturnOp::new(&mut ctx, None)
+        .get_operation()
+        .insert_at_back(entry, &ctx);
+    func.get_operation().insert_at_back(module_block, &ctx);
+
+    let ir = export_module_to_string(&ctx, &module).expect("export succeeds");
+
+    assert!(
+        ir.contains("fadd fast float"),
+        "fast-math fadd must export the `fast` keyword:\n{ir}"
+    );
+    let fmul_line = ir
+        .lines()
+        .find(|line| line.contains("fmul"))
+        .expect("exported fmul line");
+    assert!(
+        !fmul_line.contains("fast"),
+        "a float binop with no fast-math flags must not gain them:\n{ir}"
+    );
+}
