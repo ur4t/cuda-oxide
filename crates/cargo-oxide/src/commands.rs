@@ -1773,7 +1773,7 @@ fn show_generated_artifacts(example_dir: &Path, example: &str) {
 const GIT_REPO: &str = "https://github.com/NVlabs/cuda-oxide.git";
 
 const RUST_TOOLCHAIN_TOML: &str = r#"[toolchain]
-channel = "nightly-2026-04-03"
+channel = "1.96.0"
 components = ["rust-src", "rustc-dev", "rust-analyzer", "clippy", "llvm-tools"]
 "#;
 

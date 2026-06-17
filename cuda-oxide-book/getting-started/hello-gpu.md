@@ -9,7 +9,7 @@ This section walks through installing cuda-oxide, creating a project, writing a 
 If you haven't already, install the build tool with the pinned nightly toolchain:
 
 ```bash
-cargo +nightly-2026-04-03 install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
+RUSTC_BOOTSTRAP=1 cargo +1.96.0 install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
 ```
 
 Verify that your environment is set up correctly:

@@ -5,6 +5,8 @@ oxide = "run --package cargo-oxide --"
 
 # Environment variables for all builds
 [env]
+# Use rustc_private APIs on beta and stable
+RUSTC_BOOTSTRAP = "1"
 # libmathdx installation path (for libmathdx-sys crate)
 # Required only when using --features libmathdx with mathdx_ffi_test.
 # IMPORTANT: Replace the placeholder below with your libmathdx install dir,

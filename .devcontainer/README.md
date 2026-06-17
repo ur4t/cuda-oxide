@@ -6,7 +6,7 @@ This dev container provides the toolchain expected by cuda-oxide:
 - CUDA Toolkit 13.0
 - LLVM 21 with NVPTX support
 - Clang 21 resource headers for `bindgen`
-- Rust `nightly-2026-04-03` with `rust-src` and `rustc-dev`
+- Rust `1.96.0` with `rust-src` and `rustc-dev`
 
 Open the repository in a devcontainer-aware editor and choose "Reopen in
 Container". The container requests GPU access with `--gpus=all` and uses
